@@ -1,57 +1,69 @@
 package com.nibemi.gpsmascotas;
 
+import android.app.Activity;
 import android.content.Intent;
 import android.net.Uri;
+import android.os.Handler;
 import android.support.v7.app.AppCompatActivity;
 import android.os.Bundle;
 import android.view.View;
+import android.widget.AdapterView;
+import android.widget.ArrayAdapter;
 import android.widget.Button;
+import android.widget.ListView;
 import android.widget.TextView;
 import android.widget.Toast;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
 
-public class MainActivity extends AppCompatActivity {
+import java.util.Timer;
+import java.util.TimerTask;
+
+public class MainActivity extends Activity implements AdapterView.OnItemClickListener {
+    private BluetoothUtils bluetooth;
+    private ListView dispositivos;
+    private TextView cantidad_pasos;
+
+    private Handler handler = new Handler();
 
     WebService web = new WebService();
-
-    Button actualizar, posicion;
-    TextView pasos, fecha_text, hora_text, peso, kcalorias, kcalorias_perdidas;
+    Button desconectar, posicion;
+    TextView peso, kcalorias, kcalorias_perdidas, pasos_por_recorrer;
 
     JSONArray elementos;
-    String latitud, longitud, cantidad_pasos, fecha, hora;
+    String latitud, longitud, fecha, hora;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
 
-        actualizar = (Button)findViewById(R.id.refrescar);
-        posicion = (Button)findViewById(R.id.posicion);
+        bluetooth = new BluetoothUtils();
+        dispositivos = (ListView) findViewById(R.id.listado_dispositivos);
+        String[] nombres = bluetooth.getNames();
+        dispositivos.setAdapter(new ArrayAdapter<String>(this, android.R.layout.simple_list_item_1, nombres));
+        dispositivos.setOnItemClickListener(this);
 
-        pasos = (TextView)findViewById(R.id.pasos);
-        fecha_text = (TextView)findViewById(R.id.fecha);
-        hora_text = (TextView)findViewById(R.id.hora);
+        cantidad_pasos = (TextView) findViewById(R.id.cantidad_pasos);
+
+        desconectar = (Button)findViewById(R.id.desconectar);
+        posicion = (Button)findViewById(R.id.posicion);
 
         peso = (TextView)findViewById(R.id.peso_mascota);
         kcalorias = (TextView)findViewById(R.id.kilocalorias_mascota);
         kcalorias_perdidas = (TextView)findViewById(R.id.kilocalorias_perdidas);
+        pasos_por_recorrer = (TextView)findViewById(R.id.pasos_por_recorrer);
 
         latitud = "";
         longitud = "";
-
-        actualizar.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                Obtener_Datos();
-            }
-        });
 
         posicion.setOnClickListener(new View.OnClickListener(){
 
             @Override
             public void onClick(View v) {
+                Obtener_Datos();
+
                 if ((latitud!="")&&(longitud!="")){
                     Intent browserIntent = new Intent(Intent.ACTION_VIEW, Uri.parse("https://www.google.com/maps/@"+latitud+","+longitud+",17.5z"));
                     startActivity(browserIntent);
@@ -60,6 +72,20 @@ public class MainActivity extends AppCompatActivity {
                 }
             }
         });
+
+        desconectar.setOnClickListener(new View.OnClickListener(){
+            @Override
+            public void onClick(View v) {
+                if (bluetooth.isConnected()){
+                    bluetooth.disconnect();
+                    Toast.makeText(getApplicationContext(), "Dispositivo desconectado.",Toast.LENGTH_SHORT).show();
+                    dispositivos.setEnabled(true);
+                    desconectar.setEnabled(false);
+                }
+            }
+        });
+
+
     }
 
     public void Obtener_Datos(){
@@ -79,18 +105,8 @@ public class MainActivity extends AppCompatActivity {
                                     JSONObject jsonobject = elementos.getJSONObject(i);
                                     latitud = jsonobject.getString("latitud");
                                     longitud = jsonobject.getString("longitud");
-                                    cantidad_pasos = jsonobject.getString("cantidad_pasos");
                                     fecha = jsonobject.getString("fecha");
                                     hora = jsonobject.getString("hora");
-
-                                    pasos.setText(cantidad_pasos.toString());
-                                    fecha_text.setText("Fecha: "+fecha.toString());
-                                    hora_text.setText("Hora: "+hora.toString());
-
-                                    String peso_ingresado = peso.getText().toString();
-                                    kcalorias.setText(Kcalorias(peso_ingresado));
-                                    kcalorias_perdidas.setText(Kcalorias_Perdidas(kcalorias.getText().toString(), pasos.getText().toString()));
-
                                 }
                             }else{
                                 Toast.makeText(getApplicationContext(), "No existen valores registrado.",Toast.LENGTH_SHORT).show();
@@ -139,5 +155,74 @@ public class MainActivity extends AppCompatActivity {
             }
         }
         return calculo;
+    }
+
+    String Pasos_Recorrer(String peso, String pasos){
+        String calculo = "0";
+        if ((peso!="")&&(pasos!="")){
+            float aux = 0;
+            float aux_pasos = 0;
+            try{
+                aux = Float.parseFloat(peso);
+                aux_pasos = Float.parseFloat(pasos);
+                float pasos_recorrer = (((aux*30)+70)*4) - aux_pasos;
+
+                calculo =  Float.toString(pasos_recorrer);
+            }catch(Exception e){
+                System.out.println("Error campo no numerico");
+            }
+        }
+        return calculo;
+    }
+
+    @Override
+    public void onItemClick(AdapterView<?> parent, View view, int position, long id) {
+        if (bluetooth.connect(position)){
+            Toast.makeText(this, "Conectado correctamente", Toast.LENGTH_SHORT).show();
+            startTimer();
+            dispositivos.setEnabled(false);
+            desconectar.setEnabled(true);
+        }
+    }
+
+    // Cuando cerramos la app desconectamos
+    protected void onPause() {
+        cancelTimer();
+        super.onPause();
+        bluetooth.disconnect();
+    }
+
+    Runnable runnable = new Runnable() {
+        @Override
+        public void run() {
+            String recibe = bluetooth.recibir();
+            try{
+                if (recibe!="") {
+                    cantidad_pasos.setText(recibe);
+
+                    String peso_ingresado = peso.getText().toString();
+                    kcalorias.setText(Kcalorias(peso_ingresado));
+                    kcalorias_perdidas.setText(Kcalorias_Perdidas(kcalorias.getText().toString(), cantidad_pasos.getText().toString()));
+                    pasos_por_recorrer.setText(Pasos_Recorrer(peso_ingresado, cantidad_pasos.getText().toString()));
+                }
+            }catch(Exception e){
+                // cadena vacia
+            }
+            startTimer();
+        }
+    };
+
+    public void startTimer() {
+        handler.postDelayed(runnable, 1000);
+    }
+
+    public void cancelTimer() {
+        handler.removeCallbacks(runnable);
+    }
+
+    @Override
+    protected void onStop() {
+        super.onStop();
+        handler.removeCallbacks(runnable);
     }
 }
